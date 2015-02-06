@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Main where
 
 import Control.Applicative
@@ -70,13 +71,31 @@ combinedP = anyToken >>= \case
 parseQuery :: [String] -> Either String (Combined Regex)
 parseQuery = (>>= traverse (parseRegex . BS.pack)) . fmap snd . parse (combinedP <* endOfInput)
 
+data Options = Options { _dictionary :: String }
+    deriving (Eq, Show, Ord)
+
+$(makeLenses ''Options)
+
+defaultOpts :: Options
+defaultOpts = Options { _dictionary = "/usr/share/dict/words" }
+
+optsP :: Parser String Options
+optsP = ($ defaultOpts) . appEndo . foldMap Endo <$> many optP
+    where
+    optP :: Parser String (Options -> Options)
+    optP = dictP
+    dictP :: Parser String (Options -> Options)
+    dictP = token "-d" *> (set dictionary <$> anyToken)
+
 main :: IO ()
 main = do
     args <- getArgs
-    case parseQuery args of
+    case parse optsP args of
         Left e -> P.putStrLn e
-        Right cr -> do
-            let dictionaryFile = "/home/bhamrick/wordlists/wordlist.2e5"
-            words <- BS.lines <$> BS.readFile dictionaryFile
-            let nfa = combinedRegexNFA cr
-            BS.putStr . BS.unlines . P.map (\(x, y) -> x <> BS.pack " " <> y) $ matchWordPairs words nfa
+        Right (args', opts) -> do
+            case parseQuery args' of
+                Left e -> P.putStrLn e
+                Right cr -> do
+                    words <- BS.lines <$> BS.readFile (opts ^. dictionary)
+                    let nfa = combinedRegexNFA cr
+                    P.mapM_ BS.putStrLn . P.map (\(x, y) -> x <> BS.pack " " <> y) $ matchWordPairs words nfa
